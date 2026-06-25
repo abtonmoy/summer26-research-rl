@@ -5,13 +5,21 @@ from __future__ import annotations
 import numpy as np
 from scipy.stats import binom, hypergeom
 
+from .config import eps_pm
+
 
 def update_belief(g: float, x: int, a: int, para) -> float:
-    """One-step Bayesian + drift update assuming full observation of (a, x)."""
-    gp, gm, eps = para.gamma_p, para.gamma_m, para.epsilon
+    """One-step Bayesian + drift update assuming full observation of (a, x).
+
+    Drift uses directional switching rates: the posterior weight on the high
+    state keeps (1 - eps_minus) and the low-state weight leaks up at eps_plus.
+    Symmetric (eps_plus == eps_minus) recovers the original update.
+    """
+    gp, gm = para.gamma_p, para.gamma_m
+    eps_p, eps_m = eps_pm(para)
     bgp = g * (gp**x) * (1 - gp) ** (a - x)
     bgm = (1 - g) * (gm**x) * (1 - gm) ** (a - x)
-    return ((1 - eps) * bgp + eps * bgm) / (bgp + bgm)
+    return ((1 - eps_m) * bgp + eps_p * bgm) / (bgp + bgm)
 
 
 def update_partialcomm(z: int, y: int, m: int, a: int, g: float, para) -> float:
@@ -24,14 +32,14 @@ def update_partialcomm(z: int, y: int, m: int, a: int, g: float, para) -> float:
       a = total committed agents
       g = current belief
     """
-    eps = para.epsilon
+    eps_p, eps_m = eps_pm(para)
     gp, gm = para.gamma_p, para.gamma_m
 
     # Degenerate case: no committed agents -> no observation, only noise update.
     # MATLAB's hygepdf(0,0,0,0) returns 1 (degenerate hypergeometric), but
     # scipy's hypergeom.pmf(0,0,0,0) returns NaN. Handle explicitly.
     if a == 0:
-        return (1 - eps) * g + eps * (1 - g)
+        return (1 - eps_m) * g + eps_p * (1 - g)
 
     x_vec = np.arange(a + 1)
     # Hypergeometric likelihood p(y|x,m) with population a, successes x_vec, sample m.
@@ -52,4 +60,4 @@ def update_partialcomm(z: int, y: int, m: int, a: int, g: float, para) -> float:
     else:
         raise ValueError(f"z must be in {{-1, 0, 1}}, got {z}")
 
-    return (1 - eps) * U + eps * (1 - U)
+    return (1 - eps_m) * U + eps_p * (1 - U)

@@ -21,7 +21,7 @@ from sims._common import OUTPUT, parse_args
 from ftns import (
     bellman_rhs_component,
     bellman_sol,
-    mc_performance,
+    mc_performance_batch as mc_performance,
     save_mat,
     load_mat,
     Para,

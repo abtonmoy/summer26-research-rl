@@ -22,7 +22,13 @@ joblib            # parfor replacement
 tqdm              # progress
 ```
 
-Install with `pip install -r requirements.txt`.
+Install with `pip install -r requirements.txt`, or with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv venv --python 3.13
+uv pip install -r requirements.txt
+uv run python -m sims.sim2_normative_comp   # run anything via `uv run`
+```
 
 ## Layout
 
@@ -100,3 +106,45 @@ interoperable with the original MATLAB pipeline.
   shipped sim; if you call `update_optindiv` it uses
   `scipy.optimize.differential_evolution` as the replacement.
 - All sims accept `--quick` to shrink expensive sweeps for smoke testing.
+
+## Performance — vectorized fast paths
+
+The Monte-Carlo and population sweeps were the wall-clock bottleneck (the full
+suite ran ~10-12 h). Each now has a **numpy-batched** drop-in replacement that
+moves the replicate/population dimension out of Python (and joblib) loops into
+vectorized array ops; only the serial time / belief recursion is kept as a loop.
+The original scalar functions are preserved as references and for validation.
+
+| Scalar (reference)    | Batched fast path                                  | Used by        | Speedup                | Equivalence                       |
+|-----------------------|----------------------------------------------------|----------------|------------------------|-----------------------------------|
+| `bellman.avg_return`  | `bellman.avg_return_batch`                         | simS1 (GA)     | ~40-100x (grows with N)| deterministic — matches to ~1e-8  |
+| `mc.mc_performance`   | `mc.mc_performance_batch`                          | sim3, simS5    | ~44x                   | within MC noise (~1/sqrt(MC))     |
+| `mc.mc_partialcomm`   | `mc.mc_partialcomm_batch` / `mc.partialcomm_run_batch` | simS7, simS7b | ~57-70x             | within MC noise                   |
+
+How they work:
+
+- **`avg_return_batch`** solves the entire GA population's policy-evaluation
+  value iteration at once with a single batched `einsum`, and evaluates only each
+  policy's own action per state (the scalar path computed all `N+1` actions via
+  `bellman_rhs`). It is deterministic, so it reproduces `avg_return` to iteration
+  tolerance (`max |Δρ| ≈ 1e-8`). This took simS1 from ~10 h to ~15 min.
+- **`mc_performance_batch`** steps all MC replicates together, tracking only the
+  per-step committed count and successes (drawn as one binomial per replicate) —
+  the `rho`/accuracy statistics need nothing finer, so no `N×T` per-agent arrays.
+- **`mc_partialcomm_batch` / `partialcomm_run_batch`** vectorize the partial-comm
+  MC over replicates *and* the per-agent communication loop over `N`. The key
+  enabler is the identity
+  `Σ_x Hypergeom(y; a, x, m)·Binom(x; a, p) = Binom(y; m, p)`,
+  which collapses the peer-evidence marginal likelihood to a single binomial pmf
+  and removes the dominant `scipy.stats` per-call overhead. simS7 (full) dropped
+  from ~2.5 h to ~2 min.
+
+Because the MC fast paths draw random numbers in a different order than the
+scalar loops, they agree with the references **within MC noise**, not bit-for-bit
+(the deterministic `avg_return_batch` does match bit-for-bit). All of this is
+checked by `python tests/test_vs_matlab.py`: deterministic outputs (sim2, simS2,
+simS3, simS6) stay bit-exact, and the MC-driven outputs stay within tolerance.
+
+Still scalar (not yet batched), and now the longest sims: the deterministic
+Bellman heatmaps `sim4` and `simS6`, and `mc_response` (used by `simS4`). These
+would need a batched `bellman_sol` (with the max-over-actions step) to speed up.

@@ -21,7 +21,7 @@ from ftns import (
     bellman_rhs_component,
     bellman_sol,
     load_mat,
-    mc_performance,
+    mc_performance_batch as mc_performance,
     save_mat,
 )
 

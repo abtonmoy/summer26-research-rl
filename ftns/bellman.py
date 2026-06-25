@@ -14,6 +14,8 @@ from __future__ import annotations
 import numpy as np
 from joblib import Parallel, delayed
 
+from .config import eps_pm
+
 
 def _build_K_for_n(
     n: int,
@@ -22,7 +24,8 @@ def _build_K_for_n(
     gN: int,
     gamma_p: float,
     gamma_m: float,
-    epsilon: float,
+    eps_p: float,
+    eps_m: float,
 ) -> np.ndarray:
     """Build the (gN x gN) interpolation operator K for action n.
 
@@ -42,11 +45,13 @@ def _build_K_for_n(
         from scipy.stats import binom  # local import to keep top clean
         Ev = binom.pmf(x, n, r1) * g0 + binom.pmf(x, n, r0) * (1 - g0)
 
-        # Posterior g' = ((1-eps)*g*P(x|+) + eps*(1-g)*P(x|-)) /
+        # Posterior g' = ((1-eps_m)*g*P(x|+) + eps_p*(1-g)*P(x|-)) /
         #                (g*P(x|+) + (1-g)*P(x|-))
+        # Directional drift: high-state weight keeps (1-eps_minus), low-state
+        # weight leaks up at eps_plus. Symmetric rates recover the original.
         Bp = (r1**x) * ((1 - r1) ** (n - x))
         Bm = (r0**x) * ((1 - r0) ** (n - x))
-        num = (1 - epsilon) * g0 * Bp + epsilon * (1 - g0) * Bm
+        num = (1 - eps_m) * g0 * Bp + eps_p * (1 - g0) * Bm
         den = g0 * Bp + (1 - g0) * Bm
         # avoid div-by-zero (only happens if Bp==Bm==0, which requires non-physical input)
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -91,9 +96,10 @@ def bellman_rhs_component(para, num_para, n_jobs: int = -1) -> dict:
     r_bar = n_vec * r1 + n_idle * r0                     # (N+1, gN)
 
     # Parallel build of K_n
+    eps_p, eps_m = eps_pm(para)
     Kcell = Parallel(n_jobs=n_jobs, prefer="processes")(
         delayed(_build_K_for_n)(
-            n, gD, dg, gN, para.gamma_p, para.gamma_m, para.epsilon
+            n, gD, dg, gN, para.gamma_p, para.gamma_m, eps_p, eps_m
         )
         for n in range(N + 1)
     )
@@ -158,6 +164,53 @@ def avg_return(policy: np.ndarray, comp: dict, para, num_para,
         V = V1
         it += 1
     return float(rho)
+
+
+def avg_return_batch(policies, comp: dict, num_para,
+                     tol: float = 1e-6, max_iter: int = 100_000) -> np.ndarray:
+    """Vectorized `avg_return` for a whole *batch* of fixed policies.
+
+    Mathematically identical to calling `avg_return` on each row of `policies`,
+    but solves the entire population simultaneously with numpy. Two wins over the
+    per-policy path:
+
+      1. For policy m we only need its own transition K_{policy[m,g]} at each
+         state g, not `bellman_rhs`'s full (N+1, gN) stack over every action.
+      2. The population dimension M moves from a Python/joblib loop into a single
+         batched value iteration (one einsum per step).
+
+    `policies` is (M, gN) of integer actions on the belief grid. Returns rho of
+    shape (M,). Deterministic, so it agrees with `avg_return` to iteration tol.
+    """
+    gN = num_para.gN
+    policies = np.asarray(policies, dtype=int)
+    squeeze = policies.ndim == 1
+    if squeeze:
+        policies = policies[None, :]
+    M = policies.shape[0]
+
+    r_bar = comp["r_bar"]                       # (N+1, gN)
+    K_stack = np.asarray(comp["V_bracket"])     # (N+1, gN, gN)
+
+    cols = np.arange(gN)
+    # Pt[m, g, i] = K_{policy[m,g]}[i, g], so EV[m,g] = sum_i Pt[m,g,i] * V[m,i]
+    # matches the scalar (V @ K_n)[g] = sum_i V[i] K_n[i,g].
+    Pt = K_stack[policies, :, cols[None, :]]    # (M, gN, gN)
+    r_m = r_bar[policies, cols[None, :]]        # (M, gN)
+
+    V = np.zeros((M, gN))
+    rho = np.zeros(M)
+    for _ in range(max_iter):
+        EV = np.einsum("mgi,mi->mg", Pt, V, optimize=True)
+        V1 = r_m + EV
+        rho = V1[:, 0] - V[:, 0]
+        V1 = V1 - rho[:, None]
+        err = np.abs(V1 - V).sum(axis=1)
+        V = V1
+        if np.all(err <= tol):
+            break
+
+    return float(rho[0]) if squeeze else rho
 
 
 def crit_belif(para) -> float:

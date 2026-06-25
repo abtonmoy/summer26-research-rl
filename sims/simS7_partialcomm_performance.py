@@ -20,7 +20,7 @@ from ftns import (
     Para,
     bellman_rhs_component,
     bellman_sol,
-    mc_partialcomm,
+    mc_partialcomm_batch as mc_partialcomm,
     policy2dist,
     save_mat,
 )

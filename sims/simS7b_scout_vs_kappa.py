@@ -54,6 +54,7 @@ from ftns import (
     Para,
     bellman_rhs_component,
     bellman_sol,
+    partialcomm_run_batch,
     policy2dist,
     save_mat,
     update_partialcomm,
@@ -66,6 +67,8 @@ from ftns.config import (
     N_DEFAULT,
     SCOUT_CUTOFF,
     THETA_C,
+    eps_pm,
+    g_star,
 )
 
 
@@ -78,7 +81,7 @@ def _episode(theta, S, seed, para, T, N):
     rng = np.random.default_rng(seed)
     gp, gm = para.gamma_p, para.gamma_m
     lam, kappa = para.lambda1, para.kappa
-    g = 0.5 * np.ones(N)
+    g = g_star(para) * np.ones(N)
     r_total = 0.0
     for t in range(T):
         gamma = gp if S[t] == 1 else gm
@@ -173,25 +176,28 @@ def main():
     # ---- Common random numbers: ONE set of environment sequences + draw seeds,
     # reused for every (kappa, s). Environment switching depends only on epsilon
     # (not kappa), so the same S_all is valid throughout.
-    eps = para.epsilon
+    eps_p, eps_m = eps_pm(para)
+    gs = g_star(para)
     env_rng = np.random.default_rng(args.seed + 777)
     S_all = np.empty((MC, T), dtype=int)
     for r in range(MC):
-        s0 = 1 if env_rng.random() < 0.5 else -1
+        s0 = 1 if env_rng.random() < gs else -1
         for t in range(T):
             S_all[r, t] = s0
-            if env_rng.random() < eps:
+            rate = eps_m if s0 == 1 else eps_p
+            if env_rng.random() < rate:
                 s0 = -s0
     rep_seeds = np.random.SeedSequence(args.seed + 13).spawn(MC)
     rep_seed_ints = [int(s.generate_state(1)[0]) for s in rep_seeds]
 
     def eval_alloc(theta, kappa):
         para.kappa = kappa
-        vals = Parallel(n_jobs=args.n_jobs, prefer="processes")(
-            delayed(_episode)(theta, S_all[r], rep_seed_ints[r], para, T, N)
-            for r in range(MC)
-        )
-        return np.asarray(vals, dtype=float)   # (MC,)
+        # Vectorized over all MC replicates. CRN preserved: the same S_all
+        # environment block AND a fixed draw seed are reused for every (kappa, s),
+        # so allocations are compared on common random numbers (paired test).
+        rng = np.random.default_rng(args.seed + 13)
+        r_total, _, _ = partialcomm_run_batch(theta, S_all, para, rng)
+        return r_total / T   # (MC,)
 
     # rho_reps[ki] : (MC, n_s) paired returns (shared environment across s)
     rho_reps = np.zeros((n_kappa, MC, n_s))

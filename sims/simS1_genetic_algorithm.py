@@ -13,13 +13,12 @@ import os
 import time
 
 import numpy as np
-from joblib import Parallel, delayed
 
 from sims._common import OUTPUT, parse_args
 from ftns import (
     NumPara,
     Para,
-    avg_return,
+    avg_return_batch,
     bellman_rhs_component,
     bellman_sol,
     crit_belif,
@@ -31,12 +30,9 @@ from ftns.config import EPSILON, GAMMA_MINUS, GAMMA_PLUS, LAMBDA_COST
 
 
 def _score_pop(policies, comp, para, num_para, n_jobs):
-    return np.array(
-        Parallel(n_jobs=n_jobs, prefer="threads")(
-            delayed(avg_return)(policies[m], comp, para, num_para)
-            for m in range(policies.shape[0])
-        )
-    )
+    # Vectorized batch value-iteration over the whole population (~100x faster
+    # than looping avg_return per policy). n_jobs kept for signature parity.
+    return np.asarray(avg_return_batch(policies, comp, num_para))
 
 
 def main():
@@ -85,8 +81,7 @@ def main():
             t0 = time.time()
             genes = update_ga(scores, genes, num_para, rng=rng)
             policies = dist2policy(genes, num_para)
-            scores = np.array([avg_return(policies[m], comp, para, num_para)
-                               for m in range(pop_size)])
+            scores = np.asarray(avg_return_batch(policies, comp, num_para))
 
             best_idx = int(scores.argmax())
             best_score = float(scores[best_idx])

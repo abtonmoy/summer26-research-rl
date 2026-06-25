@@ -18,6 +18,8 @@ from typing import Any
 import numpy as np
 from scipy.io import loadmat, savemat
 
+from .config import eps_pm, g_star
+
 
 class Para(dict):
     """Mutable parameter struct with attribute access."""
@@ -72,10 +74,11 @@ def _act_policy(g: float, policy: np.ndarray, dg: float) -> int:
 
 
 def _update_belief(g: float, x: int, a: int, para: Para) -> float:
-    gp, gm, eps = para.gamma_p, para.gamma_m, para.epsilon
+    gp, gm = para.gamma_p, para.gamma_m
+    eps_p, eps_m = eps_pm(para)
     bgp = g * (gp**x) * (1 - gp) ** (a - x)
     bgm = (1 - g) * (gm**x) * (1 - gm) ** (a - x)
-    return ((1 - eps) * bgp + eps * bgm) / (bgp + bgm)
+    return ((1 - eps_m) * bgp + eps_p * bgm) / (bgp + bgm)
 
 
 def stoch_return(
@@ -93,7 +96,7 @@ def stoch_return(
     gamma = np.array([para.gamma_m, para.gamma_p])
 
     sumR = 0.0
-    g = 0.5
+    g = g_star(para)
     for t in range(T):
         a = _act_policy(g, policy, dg)
         gammat = gamma[int((S[t] + 1) // 2)]  # state in {-1,1} -> idx

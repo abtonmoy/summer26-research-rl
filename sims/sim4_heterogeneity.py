@@ -28,8 +28,15 @@ from ftns import (
 )
 
 
-def is_valid(lmd, dg, eps):
-    return (lmd >= (eps - 0.5) * dg + 0.5) and (lmd <= (0.5 - eps) * dg + 0.5)
+def is_valid(lmd, dg, eps_p, eps_m=None):
+    # Feasibility wedge: the critical belief gc must lie inside the reachable
+    # belief band [eps_plus, 1 - eps_minus] of the asymmetric predict step.
+    # With gamma centered at 1/2 this becomes
+    #   (eps_p - 1/2) dg + 1/2  <=  lmd  <=  (1/2 - eps_m) dg + 1/2.
+    # Symmetric (eps_p == eps_m) recovers the original symmetric bound exactly.
+    if eps_m is None:
+        eps_m = eps_p
+    return (lmd >= (eps_p - 0.5) * dg + 0.5) and (lmd <= (0.5 - eps_m) * dg + 0.5)
 
 
 def main():

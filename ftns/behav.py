@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from .belief import update_belief
+from .config import g_star
 from .env import env_state
 
 
@@ -30,7 +31,7 @@ def behav_dyn(policy, st, para, num_para, rng: np.random.Generator | None = None
     xt = np.zeros(T, dtype=int)
     rt = np.zeros(T)
 
-    g = 0.5
+    g = g_star(para)
     for t in range(T):
         gt[t] = g
         a = _act(g, policy, dg)
@@ -66,7 +67,7 @@ def behav_dyn_stoch(policy, para, num_para, rng: np.random.Generator | None = No
 
     st = env_state(T, para, rng=rng)  # {-1, 1}
 
-    g = 0.5
+    g = g_star(para)
     for t in range(T):
         gt[t] = g
         n1 = _act(g, policy, dg)
