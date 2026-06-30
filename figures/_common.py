@@ -14,7 +14,11 @@ if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
 OUTPUT = os.path.join(REPO, "output")
-FIGS = os.path.join(REPO, "figs")
+# Output directory for figures. Defaults to figs/, override with FIGS_DIR env var
+# (absolute, or relative to the repo root).
+FIGS = os.environ.get("FIGS_DIR") or os.path.join(REPO, "figs")
+if not os.path.isabs(FIGS):
+    FIGS = os.path.join(REPO, FIGS)
 os.makedirs(FIGS, exist_ok=True)
 
 # Okabe-Ito palette: black, orange, sky blue, bluish green, yellow, blue,
